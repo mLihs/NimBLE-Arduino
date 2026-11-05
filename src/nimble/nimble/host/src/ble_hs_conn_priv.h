@@ -106,6 +106,16 @@ struct ble_hs_conn {
 
     STAILQ_HEAD(, os_mbuf_pkthdr) att_tx_q;
     bool client_att_busy;
+
+    /* Peripheral link: BLE_GAP_EVENT_CONNECT was sent. Per connection
+     * because controller handles can exceed BLE_MAX_CONNECTIONS. */
+    uint8_t slave_conn:1;
+
+    /* Last data length reported by the controller (LE Data Length Change). */
+    uint16_t bhc_max_tx_octets;
+    uint16_t bhc_max_rx_octets;
+    uint16_t bhc_max_tx_time;
+    uint16_t bhc_max_rx_time;
 #if MYNEWT_VAL(BLE_EATT_CHAN_NUM) > 0
     uint16_t default_cid;
 #endif

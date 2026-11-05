@@ -296,7 +296,6 @@ static uint8_t pawr_adv_handle;
 static uint16_t pawr_sync_handle;
 #endif
 
-int slave_conn[MYNEWT_VAL(BLE_MAX_CONNECTIONS) + 1];
 static void ble_gap_update_entry_free(struct ble_gap_update_entry *entry);
 
 #if NIMBLE_BLE_CONNECT
@@ -322,11 +321,6 @@ static int ble_gap_conn_cancel_tx(void);
 #if NIMBLE_BLE_SCAN && !MYNEWT_VAL(BLE_EXT_ADV)
 static int ble_gap_disc_enable_tx(int enable, int filter_duplicates);
 #endif
-
-uint16_t g_max_tx_time[MYNEWT_VAL(BLE_MAX_CONNECTIONS) + 1];
-uint16_t g_max_rx_time[MYNEWT_VAL(BLE_MAX_CONNECTIONS) + 1 ];
-uint16_t g_max_tx_octets[MYNEWT_VAL(BLE_MAX_CONNECTIONS) + 1];
-uint16_t g_max_rx_octets[MYNEWT_VAL(BLE_MAX_CONNECTIONS) + 1];
 
 STATS_SECT_DECL(ble_gap_stats) ble_gap_stats;
 STATS_NAME_START(ble_gap_stats)
@@ -1597,23 +1591,18 @@ ble_gap_conn_broken(uint16_t conn_handle, int reason)
 
     ble_hs_lock();
     conn = ble_hs_conn_find(conn_handle);
-    ble_hs_unlock();
 
     // Send disconnect event in slave role if connect was sent
     if ((conn != NULL) &&  !(conn->bhc_flags & BLE_HS_CONN_F_MASTER)) {
-        if (slave_conn[conn_handle]) {
-            slave_conn[conn_handle] = 0;
+        if (conn->slave_conn) {
+            conn->slave_conn = 0;
 	} else {
 	    send = 0;
 	}
     }
+    ble_hs_unlock();
 
     ble_hs_atomic_conn_delete(conn_handle);
-
-    g_max_tx_time[conn_handle] = 0;
-    g_max_rx_time[conn_handle] = 0;
-    g_max_tx_octets[conn_handle] = 0;
-    g_max_rx_octets[conn_handle] = 0;
 
     event.type = BLE_GAP_EVENT_DISCONNECT;
     event.disconnect.reason = reason;
@@ -2842,7 +2831,12 @@ ble_gap_rx_rd_rem_sup_feat_complete(const struct ble_hci_ev_le_subev_rd_rem_used
 
 	if (conn != NULL) {
             ble_gap_event_connect_call(ev->conn_handle, ev->status);
-            slave_conn[ev->conn_handle] = 1;
+            ble_hs_lock();
+            conn = ble_hs_conn_find(le16toh(ev->conn_handle));
+            if (conn != NULL) {
+                conn->slave_conn = 1;
+            }
+            ble_hs_unlock();
         }
     }
 #endif
@@ -2920,6 +2914,7 @@ ble_gap_rx_data_len_change(const struct ble_hci_ev_le_subev_data_len_chg *ev)
 {
 #if NIMBLE_BLE_CONNECT
     struct ble_gap_event event;
+    struct ble_hs_conn *conn;
     uint16_t conn_handle = le16toh(ev->conn_handle);
 
     memset(&event, 0, sizeof event);
@@ -2929,10 +2924,15 @@ ble_gap_rx_data_len_change(const struct ble_hci_ev_le_subev_data_len_chg *ev)
     event.data_len_chg.max_tx_time = le16toh(ev->max_tx_time);
     event.data_len_chg.max_rx_time = le16toh(ev->max_rx_time);
 
-    g_max_tx_octets[conn_handle] = event.data_len_chg.max_tx_octets;
-    g_max_rx_octets[conn_handle] = event.data_len_chg.max_rx_octets;
-    g_max_tx_time[conn_handle] = event.data_len_chg.max_tx_time;
-    g_max_rx_time[conn_handle] = event.data_len_chg.max_rx_time;
+    ble_hs_lock();
+    conn = ble_hs_conn_find(conn_handle);
+    if (conn != NULL) {
+        conn->bhc_max_tx_octets = event.data_len_chg.max_tx_octets;
+        conn->bhc_max_rx_octets = event.data_len_chg.max_rx_octets;
+        conn->bhc_max_tx_time = event.data_len_chg.max_tx_time;
+        conn->bhc_max_rx_time = event.data_len_chg.max_rx_time;
+    }
+    ble_hs_unlock();
 
     ble_gap_event_listener_call(&event);
     ble_gap_call_conn_event_cb(&event, conn_handle);
@@ -8020,21 +8020,29 @@ ble_gap_set_data_len(uint16_t conn_handle, uint16_t tx_octets,
                      uint16_t tx_time)
 {
 #if NIMBLE_BLE_CONNECT
+    struct ble_hs_conn *conn;
+    struct ble_gap_event event;
+    int same = 0;
+
+    memset(&event, 0, sizeof event);
+    ble_hs_lock();
+    conn = ble_hs_conn_find(conn_handle);
+    if (conn != NULL) {
+        same = conn->bhc_max_tx_time == tx_time && conn->bhc_max_tx_octets == tx_octets;
+        event.data_len_chg.max_tx_octets = conn->bhc_max_tx_octets;
+        event.data_len_chg.max_rx_octets = conn->bhc_max_rx_octets;
+        event.data_len_chg.max_tx_time = conn->bhc_max_tx_time;
+        event.data_len_chg.max_rx_time = conn->bhc_max_rx_time;
+    }
+    ble_hs_unlock();
+
     /* Check if host has triggered Set data len for same parameters
      * which are currently set in controller.
      * If yes, then just return event to host indicating success
      * since controller will not send any event in this scenario
      */
-    if (g_max_tx_time[conn_handle] == tx_time && g_max_tx_octets[conn_handle] == tx_octets) {
-
-        struct ble_gap_event event;
-
-        memset(&event, 0, sizeof event);
+    if (same) {
         event.type = BLE_GAP_EVENT_DATA_LEN_CHG;
-        event.data_len_chg.max_tx_octets = g_max_tx_octets[conn_handle];
-        event.data_len_chg.max_rx_octets = g_max_rx_octets[conn_handle];
-        event.data_len_chg.max_tx_time = g_max_tx_time[conn_handle];
-        event.data_len_chg.max_rx_time = g_max_rx_time[conn_handle];
         event.data_len_chg.conn_handle = conn_handle;
 
         ble_gap_event_listener_call(&event);
