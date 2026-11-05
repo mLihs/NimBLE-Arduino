@@ -22,7 +22,7 @@ link (a central such as Zwift connecting to us) got handle 4, and
 hardware test, core dump, reproduced twice by closing Zwift).
 
 **Fix.** The state moves into `struct ble_hs_conn` (`ble_hs_conn_priv.h`), as in
-upstream esp-nimble (`nimble-1.6.0-idf` and later), where `slave_conn` is a bit in
+upstream esp-nimble (`nimble-1.5.0-idf` and `nimble-1.6.0-idf`, October 2025), where `slave_conn` is a bit in
 the connection object; NimBLE-Arduino master (3.0.0-dev) no longer has the array.
 
 - `slave_conn:1`: set under `ble_hs_lock()` after the connect event in
@@ -31,8 +31,10 @@ the connection object; NimBLE-Arduino master (3.0.0-dev) no longer has the array
   under the lock, in `ble_gap_conn_broken()` before `ble_hs_atomic_conn_delete()`.
 - `bhc_max_tx_octets/rx_octets/tx_time/rx_time`: written in
   `ble_gap_rx_data_len_change()`, read in `ble_gap_set_data_len()`, both under
-  the lock. A new connection starts at 0 (`ble_hs_conn_alloc()` clears it); an
-  unknown handle in `ble_gap_set_data_len()` goes to the controller as before.
+  the lock. A new connection starts at 0 (`ble_hs_conn_alloc()` clears it); for
+  an unknown handle `ble_gap_set_data_len()` always sends the command to the
+  controller (as upstream; 2.5.2 answered a zero request for an unknown handle
+  0..3 with a synthetic event).
 
 Not changed: `host/mesh/src/proxy_msg.c` also indexes `roles[]` with the handle;
 mesh is not built in this configuration (`BLE_MESH_PROXY` off).
