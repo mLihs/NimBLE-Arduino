@@ -1,3 +1,9 @@
 docs/doxydocs
 .development
 _codeql_detected_source_root
+src/nimble/.DS_Store
+src/.DS_Store
+examples/.DS_Store
+examples/Bluetooth_5/.DS_Store
+examples/L2CAP/.DS_Store
+.DS_Store
